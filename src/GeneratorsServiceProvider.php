@@ -23,9 +23,12 @@ class GeneratorsServiceProvider extends ServiceProvider
      */
     public function register()
     {
+    	$conf = __DIR__.'/config/laracasts.generators.php';
+
         $this->registerSeedGenerator();
         $this->registerMigrationGenerator();
         $this->registerPivotMigrationGenerator();
+		$this->mergeConfigFrom($conf, 'laracasts.generators');
     }
 
     /**

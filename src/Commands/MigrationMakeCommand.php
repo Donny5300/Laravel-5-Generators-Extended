@@ -1,248 +1,273 @@
 <?php
 
-namespace Laracasts\Generators\Commands;
+	namespace Laracasts\Generators\Commands;
 
-use Illuminate\Console\AppNamespaceDetectorTrait;
-use Illuminate\Console\Command;
-use Illuminate\Filesystem\Filesystem;
-use Laracasts\Generators\Migrations\NameParser;
-use Laracasts\Generators\Migrations\SchemaParser;
-use Laracasts\Generators\Migrations\SyntaxBuilder;
-use Symfony\Component\Console\Input\InputOption;
-use Symfony\Component\Console\Input\InputArgument;
+	use Illuminate\Console\AppNamespaceDetectorTrait;
+	use Illuminate\Console\Command;
+	use Illuminate\Filesystem\Filesystem;
+	use Laracasts\Generators\Migrations\NameParser;
+	use Laracasts\Generators\Migrations\SchemaParser;
+	use Laracasts\Generators\Migrations\SyntaxBuilder;
+	use Symfony\Component\Console\Input\InputArgument;
+	use Symfony\Component\Console\Input\InputOption;
 
-class MigrationMakeCommand extends Command
-{
-    use AppNamespaceDetectorTrait;
+	class MigrationMakeCommand extends Command
+	{
+		use AppNamespaceDetectorTrait;
 
-    /**
-     * The console command name.
-     *
-     * @var string
-     */
-    protected $name = 'make:migration:schema';
+		/**
+		 * The console command name.
+		 *
+		 * @var string
+		 */
+		protected $name = 'make:migration:schema';
 
-    /**
-     * The console command description.
-     *
-     * @var string
-     */
-    protected $description = 'Create a new migration class and apply schema at the same time';
+		/**
+		 * The console command description.
+		 *
+		 * @var string
+		 */
+		protected $description = 'Create a new migration class and apply schema at the same time';
 
-    /**
-     * The filesystem instance.
-     *
-     * @var Filesystem
-     */
-    protected $files;
+		/**
+		 * The filesystem instance.
+		 *
+		 * @var Filesystem
+		 */
+		protected $files;
 
-    /**
-     * Meta information for the requested migration.
-     *
-     * @var array
-     */
-    protected $meta;
+		/**
+		 * Meta information for the requested migration.
+		 *
+		 * @var array
+		 */
+		protected $meta;
 
-    /**
-     * @var Composer
-     */
-    private $composer;
+		/**
+		 * @var Composer
+		 */
+		private $composer;
 
-    /**
-     * Create a new command instance.
-     *
-     * @param Filesystem $files
-     * @param Composer $composer
-     */
-    public function __construct(Filesystem $files)
-    {
-        parent::__construct();
+		/**
+		 * Create a new command instance.
+		 *
+		 * @param Filesystem $files
+		 * @param Composer   $composer
+		 */
+		public function __construct( Filesystem $files )
+		{
+			parent::__construct();
 
-        $this->files = $files;
-        $this->composer = app()['composer'];
-    }
 
-    /**
-     * Execute the console command.
-     *
-     * @return mixed
-     */
-    public function fire()
-    {
-        $this->meta = (new NameParser)->parse($this->argument('name'));
+			$this->files    = $files;
+			$this->composer = app()['composer'];
+		}
 
-        $this->makeMigration();
-        $this->makeModel();
-    }
+		/**
+		 * Get the path to where we should store the migration.
+		 *
+		 * @param  string $name
+		 *
+		 * @return string
+		 */
+		protected function getPath( $name )
+		{
+			return base_path() . '/database/migrations/' . date( 'Y_m_d_His' ) . '_' . $name . '.php';
+		}
 
-    /**
-     * Generate the desired migration.
-     */
-    protected function makeMigration()
-    {
-        $name = $this->argument('name');
+		/**
+		 * Get the destination class path.
+		 *
+		 * @param  string $name
+		 *
+		 * @return string
+		 */
+		protected function getModelPath( $name )
+		{
+			$name = str_replace( $this->getAppNamespace(), '', $name );
 
-        if ($this->files->exists($path = $this->getPath($name))) {
-            return $this->error($this->type . ' already exists!');
-        }
+			return $this->laravel['path'] . '/' . str_replace( '\\', '/', $name ) . '.php';
+		}
 
-        $this->makeDirectory($path);
+		/**
+		 * Get the class name for the Eloquent model generator.
+		 *
+		 * @return string
+		 */
+		protected function getModelName()
+		{
+			return ucwords( str_singular( camel_case( $this->meta['table'] ) ) );
+		}
 
-        $this->files->put($path, $this->compileMigrationStub());
+		/**
+		 * Get the console command arguments.
+		 *
+		 * @return array
+		 */
+		protected function getArguments()
+		{
+			return [
+				[ 'name', InputArgument::REQUIRED, 'The name of the migration' ],
+			];
+		}
 
-        $this->info('Migration created successfully.');
+		/**
+		 * Get the console command options.
+		 *
+		 * @return array
+		 */
+		protected function getOptions()
+		{
+			return [
+				[ 'schema', 's', InputOption::VALUE_OPTIONAL, 'Optional schema to be attached to the migration', null ],
+				[ 'model', null, InputOption::VALUE_OPTIONAL, 'Want a model for this table?', config( 'laracasts.generators.make_model' ) ],
+				[ 'pg_scheme', null, InputOption::VALUE_OPTIONAL, 'Want to use a PostgreSql schema?', false ]
+			];
+		}
 
-        $this->composer->dumpAutoloads();
-    }
+		/**
+		 * Generate the desired migration.
+		 */
+		protected function makeMigration()
+		{
+			$name = $this->argument( 'name' );
 
-    /**
-     * Generate an Eloquent model, if the user wishes.
-     */
-    protected function makeModel()
-    {
-        $modelPath = $this->getModelPath($this->getModelName());
+			if( $this->files->exists( $path = $this->getPath( $name ) ) )
+			{
+				return $this->error( $this->type . ' already exists!' );
+			}
 
-        if ($this->option('model') && !$this->files->exists($modelPath)) {
-            $this->call('make:model', [
-                'name' => $this->getModelName()
-            ]);
-        }
-    }
+			$this->makeDirectory( $path );
 
-    /**
-     * Build the directory for the class if necessary.
-     *
-     * @param  string $path
-     * @return string
-     */
-    protected function makeDirectory($path)
-    {
-        if (!$this->files->isDirectory(dirname($path))) {
-            $this->files->makeDirectory(dirname($path), 0777, true, true);
-        }
-    }
+			$this->files->put( $path, $this->compileMigrationStub() );
 
-    /**
-     * Get the path to where we should store the migration.
-     *
-     * @param  string $name
-     * @return string
-     */
-    protected function getPath($name)
-    {
-        return base_path() . '/database/migrations/' . date('Y_m_d_His') . '_' . $name . '.php';
-    }
+			$this->info( 'Migration created successfully.' );
 
-    /**
-     * Get the destination class path.
-     *
-     * @param  string $name
-     * @return string
-     */
-    protected function getModelPath($name)
-    {
-        $name = str_replace($this->getAppNamespace(), '', $name);
+			$this->composer->dumpAutoloads();
+		}
 
-        return $this->laravel['path'] . '/' . str_replace('\\', '/', $name) . '.php';
-    }
+		/**
+		 * Generate an Eloquent model, if the user wishes.
+		 */
+		protected function makeModel()
+		{
+			$modelPath = $this->getModelPath( $this->getModelName() );
 
-    /**
-     * Compile the migration stub.
-     *
-     * @return string
-     */
-    protected function compileMigrationStub()
-    {
-        $stub = $this->files->get(__DIR__ . '/../stubs/migration.stub');
+			if( $this->option( 'model' ) && !$this->files->exists( $modelPath ) )
+			{
+				$this->call( 'make:model', [
+					'name' => $this->getModelName()
+				] );
+			}
+		}
 
-        $this->replaceClassName($stub)
-            ->replaceSchema($stub)
-            ->replaceTableName($stub);
+		/**
+		 * Build the directory for the class if necessary.
+		 *
+		 * @param  string $path
+		 *
+		 * @return string
+		 */
+		protected function makeDirectory( $path )
+		{
+			if( !$this->files->isDirectory( dirname( $path ) ) )
+			{
+				$this->files->makeDirectory( dirname( $path ), 0777, true, true );
+			}
+		}
 
-        return $stub;
-    }
+		/**
+		 * Compile the migration stub.
+		 *
+		 * @return string
+		 */
+		protected function compileMigrationStub()
+		{
+			$stub = $this->files->get( __DIR__ . '/../stubs/migration.stub' );
 
-    /**
-     * Replace the class name in the stub.
-     *
-     * @param  string $stub
-     * @return $this
-     */
-    protected function replaceClassName(&$stub)
-    {
-        $className = ucwords(camel_case($this->argument('name')));
+			$this->replaceClassName( $stub )
+				->replaceSchema( $stub )
+				->replaceTableName( $stub )
+				->replaceSchemaName( $stub );
 
-        $stub = str_replace('{{class}}', $className, $stub);
+			return $stub;
+		}
 
-        return $this;
-    }
+		protected function replaceSchemaName( &$stub )
+		{
+			$schema = !empty( $this->option( 'pg_scheme' ) ) ? strtolower( $this->option( 'pg_scheme' ) ) . '.' : '';
 
-    /**
-     * Replace the table name in the stub.
-     *
-     * @param  string $stub
-     * @return $this
-     */
-    protected function replaceTableName(&$stub)
-    {
-        $table = $this->meta['table'];
+			$stub = str_replace( '{{schema}}', $schema, $stub );
 
-        $stub = str_replace('{{table}}', $table, $stub);
+			return $this;
+		}
 
-        return $this;
-    }
+		/**
+		 * Replace the class name in the stub.
+		 *
+		 * @param  string $stub
+		 *
+		 * @return $this
+		 */
+		protected function replaceClassName( &$stub )
+		{
+			$className = ucwords( camel_case( $this->argument( 'name' ) ) );
 
-    /**
-     * Replace the schema for the stub.
-     *
-     * @param  string $stub
-     * @return $this
-     */
-    protected function replaceSchema(&$stub)
-    {
-        if ($schema = $this->option('schema')) {
-            $schema = (new SchemaParser)->parse($schema);
-        }
+			$stub = str_replace( '{{class}}', $className, $stub );
 
-        $schema = (new SyntaxBuilder)->create($schema, $this->meta);
+			return $this;
+		}
 
-        $stub = str_replace(['{{schema_up}}', '{{schema_down}}'], $schema, $stub);
+		/**
+		 * Replace the table name in the stub.
+		 *
+		 * @param  string $stub
+		 *
+		 * @return $this
+		 */
+		protected function replaceTableName( &$stub )
+		{
+			$table = $this->meta['table'];
 
-        return $this;
-    }
+			$stub = str_replace( '{{table}}', $table, $stub );
 
-    /**
-     * Get the class name for the Eloquent model generator.
-     *
-     * @return string
-     */
-    protected function getModelName()
-    {
-        return ucwords(str_singular(camel_case($this->meta['table'])));
-    }
+			return $this;
+		}
 
-    /**
-     * Get the console command arguments.
-     *
-     * @return array
-     */
-    protected function getArguments()
-    {
-        return [
-            ['name', InputArgument::REQUIRED, 'The name of the migration'],
-        ];
-    }
+		/**
+		 * Replace the schema for the stub.
+		 *
+		 * @param  string $stub
+		 *
+		 * @return $this
+		 */
+		protected function replaceSchema( &$stub )
+		{
+			if( $schema = $this->option( 'schema' ) )
+			{
+				$schema = ( new SchemaParser )->parse( $schema );
+			}
 
-    /**
-     * Get the console command options.
-     *
-     * @return array
-     */
-    protected function getOptions()
-    {
-        return [
-            ['schema', 's', InputOption::VALUE_OPTIONAL, 'Optional schema to be attached to the migration', null],
-            ['model', null, InputOption::VALUE_OPTIONAL, 'Want a model for this table?', true],
-        ];
-    }
-}
+			$schema = ( new SyntaxBuilder )->create( $schema, $this->meta );
+
+			$stub = str_replace( [ '{{schema_up}}', '{{schema_down}}' ], $schema, $stub );
+
+			return $this;
+		}
+
+		/**
+		 * Execute the console command.
+		 *
+		 * @return mixed
+		 */
+		public function fire()
+		{
+
+			$this->meta = ( new NameParser )->parse( $this->argument( 'name' ) );
+
+			$this->makeMigration();
+
+
+			$this->makeModel();
+		}
+	}
